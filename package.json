@@ -1,6 +1,7 @@
 {
   "name": "fdkevin-extensions",
   "version": "1.0.0",
+  "repositoryName": "FDKevin's Extensions",
   "description": "FDKevin's extensions",
   "main": "index.js",
   "scripts": {
