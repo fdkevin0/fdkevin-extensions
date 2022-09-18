@@ -18,8 +18,8 @@ import {
     Tag,
 } from 'paperback-extensions-common'
 
-const COPYMANGA_DOMAIN = 'https://www.copymanga.org'
-const COPYMANGA_API_DOMAIN = 'https://api.copymanga.com'
+const COPYMANGA_DOMAIN = 'https://copymanga.site/'
+const COPYMANGA_API_DOMAIN = 'https://api.copymanga.site'
 // Number of items requested for paged requests
 const PAGE_SIZE = 30;
 
