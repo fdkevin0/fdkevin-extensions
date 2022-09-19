@@ -18,10 +18,14 @@ import {
     Tag,
 } from 'paperback-extensions-common'
 
-const COPYMANGA_DOMAIN = 'https://copymanga.site/'
-const COPYMANGA_API_DOMAIN = 'https://api.copymanga.site'
-// Number of items requested for paged requests
-const PAGE_SIZE = 30;
+import { 
+    convertImageQuality,
+    getCopymangaAPI,
+    getImageQuality,
+    getPageSize,
+    homeSections,
+    trimCoverLimit,
+} from './Common';
 
 export const CopyMangaInfo: SourceInfo = {
     version: '0.0.1',
@@ -31,7 +35,7 @@ export const CopyMangaInfo: SourceInfo = {
     authorWebsite: 'http://github.com/fdkevin0',
     icon: 'icon.png',
     contentRating: ContentRating.EVERYONE,
-    websiteBaseURL: COPYMANGA_DOMAIN,
+    websiteBaseURL: "https://copymanga.com",
     sourceTags: [
         {
             text: 'Chinese',
@@ -45,30 +49,34 @@ export const CopyMangaInfo: SourceInfo = {
 }
 
 export class CopyManga extends Source {
+    stateManager: SourceStateManager = createSourceStateManager({})
+
     requestManager = createRequestManager({
         requestsPerSecond: 5,
         requestTimeout: 80000,
     })
 
     RETRY = 5
-    stateManager: SourceStateManager = createSourceStateManager({})
-
-    override getMangaShareUrl(mangaId: string): string {
-        return `${COPYMANGA_DOMAIN}/comic/${mangaId}`
-    }
 
     override async getSourceMenu(): Promise<Section> {
         return Promise.resolve(createSection({
             id: 'main',
             header: 'Source Settings',
-            rows: async () => []
+            rows: async () => [
+
+            ]
         }))
     }
 
     async getMangaDetails(mangaId: string): Promise<Manga> {
+        const copymangaAPI = await getCopymangaAPI(this.stateManager);
+
         const request = createRequestObject({
-            url: `${COPYMANGA_API_DOMAIN}/api/v3/comic2/${mangaId}`,
+            url: `${copymangaAPI}/api/v3/comic2/${mangaId}`,
             method: 'GET',
+            headers: {
+                'platform': '3'
+            }
         })
 
         const response = await this.requestManager.schedule(request, this.RETRY)
@@ -103,34 +111,63 @@ export class CopyManga extends Source {
     }
 
     async getChapters(mangaId: string): Promise<Chapter[]> {
-        const request = createRequestObject({
-            url: `${COPYMANGA_API_DOMAIN}/api/v3/comic/${mangaId}/group/default/chapters?limit=500&offset=0`,
+        const copymangaAPI = await getCopymangaAPI(this.stateManager);
+
+        const mangaDetailrequest = createRequestObject({
+            url: `${copymangaAPI}/api/v3/comic2/${mangaId}`,
             method: 'GET',
+            headers: {
+                'platform': '3'
+            }
         })
 
-        const response = await this.requestManager.schedule(request, this.RETRY)
-        const jsonData = JSON.parse(response.data)
+        const mangaDetailresponse = await this.requestManager.schedule(mangaDetailrequest, this.RETRY)
+        const mangaDetailjsonData = JSON.parse(mangaDetailresponse.data)
 
         const chapters: Chapter[] = []
-        for (const item of jsonData.results.list) {
-            chapters.push(
-                createChapter({
-                    id: item.uuid,
-                    mangaId: mangaId,
-                    name: item.name,
-                    chapNum: Number(item.index +1 ?? '-1'),
-                    time: new Date(item.datetime_created),
-                    langCode: LanguageCode.CHINEESE,
-                })
-            )
+
+        for (const [, groupItem] of Object.entries(mangaDetailjsonData.results.groups)) {
+            const groupData: any = groupItem
+            const groupId: string = groupData.path_word 
+            const request = createRequestObject({
+                url: `${copymangaAPI}/api/v3/comic/${mangaId}/group/${groupId}/chapters?limit=500&offset=0`,
+                method: 'GET',
+                headers: {
+                    'platform': '3'
+                }
+            })
+    
+            const response = await this.requestManager.schedule(request, this.RETRY)
+            const jsonData = JSON.parse(response.data)
+    
+            for (const item of jsonData.results.list) {
+                chapters.push(
+                    createChapter({
+                        id: item.uuid,
+                        mangaId: mangaId,
+                        name: item.name,
+                        chapNum: Number(item.index +1 ?? '-1'),
+                        time: new Date(item.datetime_created),
+                        langCode: LanguageCode.CHINEESE,
+                        group: groupData.name,
+                    })
+                )
+            }
         }
+
         return chapters
     }
 
     async getChapterDetails(mangaId: string, chapterId: string): Promise<ChapterDetails> {
+        const copymangaAPI = await getCopymangaAPI(this.stateManager);
+
         const request = createRequestObject({
-            url: `${COPYMANGA_API_DOMAIN}/api/v3/comic/${mangaId}/chapter2/${chapterId}?platform=3`,
+            url: `${copymangaAPI}/api/v3/comic/${mangaId}/chapter2/${chapterId}?platform=3`,
             method: 'GET',
+            headers: {
+                'platform': '3',
+                'webp': '1'
+            }
         })
 
         const response = await this.requestManager.schedule(request, this.RETRY)
@@ -141,7 +178,7 @@ export class CopyManga extends Source {
         for (var page = 0; page < jsonData.results.chapter.size; page++) {
             for (var i = 0; i < jsonData.results.chapter.words.length; i++) {
                 if (jsonData.results.chapter.words[i] === page) {
-                    pages.push(convertToImageMode(jsonData.results.chapter.contents[i].url, 'c1500x'))
+                    pages.push(convertImageQuality(jsonData.results.chapter.contents[i].url, getImageQuality()))
                 }
             }
         }
@@ -155,11 +192,18 @@ export class CopyManga extends Source {
     }
 
     async getSearchResults(query: SearchRequest, metadata: any): Promise<PagedResults> {
+        const copymangaAPI = await getCopymangaAPI(this.stateManager);
         const page: number = metadata?.page ?? 0;
+        const pageSize: number = getPageSize(this.stateManager);
+        const offset: number = page * pageSize;
+        const keyword: string = encodeURI(query.title ?? '');
 
         const request = createRequestObject({
-            url: `${COPYMANGA_API_DOMAIN}/api/v3/search/comic?format=json&platform=3&limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}&q=${(query.title ?? '')}`,
+            url: `${copymangaAPI}/api/v3/search/comic?format=json&platform=3&limit=${pageSize}&offset=${offset}&q=${keyword}`,
             method: 'GET',
+            headers: {
+                'platform': '3'
+            }
         })
 
         const response = await this.requestManager.schedule(request, this.RETRY)
@@ -187,9 +231,14 @@ export class CopyManga extends Source {
     }
 
     override async getHomePageSections(sectionCallback: (section: HomeSection) => void): Promise<void> {
+        const copymangaAPI = await getCopymangaAPI(this.stateManager);
+
         const request = createRequestObject({
-            url: `${COPYMANGA_API_DOMAIN}/api/v3/h5/homeIndex?platform=3`,
+            url: `${copymangaAPI}/api/v3/h5/homeIndex?platform=3`,
             method: 'GET',
+            headers: {
+                'platform': '3'
+            }
         })
         const response = await this.requestManager.schedule(request, this.RETRY)
         const jsonData = JSON.parse(response.data)
@@ -217,11 +266,10 @@ export class CopyManga extends Source {
                 view_more: false,
             })
         )
-
-        const HomeSectionKeys = ['recComics', 'rankDayComics', 'rankWeekComics', 'rankMonthComics']
-        for (const key of HomeSectionKeys) {
+        
+        for (const [keyword, nameStr] of Object.entries(homeSections)) {
             const mangaTiles: MangaTile[] = []
-            for (const item of jsonData.results[key].list) {
+            for (const item of jsonData.results[keyword].list) {
                 mangaTiles.push(
                     createMangaTile({
                         id: item.comic.path_word,
@@ -232,8 +280,8 @@ export class CopyManga extends Source {
             }
             sections.push(
                 createHomeSection({
-                    id: key,
-                    title: key,
+                    id: keyword,
+                    title: nameStr,
                     items: mangaTiles,
                     view_more: false,
                 })
@@ -244,13 +292,4 @@ export class CopyManga extends Source {
             sectionCallback(section);
         }
     }
-}
-
-export function convertToImageMode(url: string, mode: string): string {
-    return url.replace('c800x', mode);
-}
-
-export function trimCoverLimit(url: string): string {
-    const limitType = url.split('.').slice(-2).join('.');
-    return url.replace(`.${limitType}`,'');
 }
