@@ -365,12 +365,65 @@ __exportStar(require("./SearchFilter"), exports);
 },{"./Chapter":5,"./ChapterDetails":6,"./Constants":7,"./DynamicUI":23,"./HomeSection":24,"./Languages":25,"./Manga":26,"./MangaTile":27,"./MangaUpdate":28,"./PagedResults":29,"./RawData":30,"./RequestHeaders":31,"./RequestInterceptor":32,"./RequestManager":33,"./RequestObject":34,"./ResponseObject":35,"./SearchField":36,"./SearchFilter":37,"./SearchRequest":38,"./SourceInfo":39,"./SourceManga":40,"./SourceStateManager":41,"./SourceTag":42,"./TagSection":43,"./TrackedManga":44,"./TrackedMangaChapterReadAction":45,"./TrackerActionQueue":46}],48:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.trimCoverLimit = exports.convertToImageMode = exports.CopyManga = exports.CopyMangaInfo = void 0;
-const paperback_extensions_common_1 = require("paperback-extensions-common");
-const COPYMANGA_DOMAIN = 'https://copymanga.site/';
-const COPYMANGA_API_DOMAIN = 'https://api.copymanga.site';
+exports.homeSections = exports.setStateData = exports.trimCoverLimit = exports.getImageQuality = exports.convertImageQuality = exports.getPageSize = exports.getCopymangaAPI = exports.getCopymangaWebsite = exports.getCopymangaDomain = void 0;
+// 
+// COPYMANGA API STATE METHODS
+//
+const DEFAULT_COPYMANGA_SERVER_DOMAIN = 'copymanga.site';
+async function getCopymangaDomain(stateManager) {
+    return await stateManager.retrieve('copymangaDomain') ?? DEFAULT_COPYMANGA_SERVER_DOMAIN;
+}
+exports.getCopymangaDomain = getCopymangaDomain;
+async function getCopymangaWebsite(stateManager) {
+    return `https://${await getCopymangaDomain(stateManager)}`;
+}
+exports.getCopymangaWebsite = getCopymangaWebsite;
+async function getCopymangaAPI(stateManager) {
+    return `https://api.${await getCopymangaDomain(stateManager)}`;
+}
+exports.getCopymangaAPI = getCopymangaAPI;
 // Number of items requested for paged requests
 const PAGE_SIZE = 30;
+function getPageSize(stateManager) {
+    return PAGE_SIZE;
+}
+exports.getPageSize = getPageSize;
+const DEFAULT_IMAGE_QUALITY = 'c800x';
+const BEST_IMAGE_QUALITY = 'c1500x';
+function convertImageQuality(url, mode) {
+    return url.replace(DEFAULT_IMAGE_QUALITY, mode);
+}
+exports.convertImageQuality = convertImageQuality;
+function getImageQuality() {
+    return BEST_IMAGE_QUALITY;
+}
+exports.getImageQuality = getImageQuality;
+function trimCoverLimit(url) {
+    const limitType = url.split('.').slice(-2).join('.');
+    return url.replace(`.${limitType}`, '');
+}
+exports.trimCoverLimit = trimCoverLimit;
+async function setStateData(stateManager, data) {
+    await setKomgaServerAddress(stateManager, data['copymangaDomain'] ?? DEFAULT_COPYMANGA_SERVER_DOMAIN);
+}
+exports.setStateData = setStateData;
+async function setKomgaServerAddress(stateManager, domain) {
+    await stateManager.store('copymangaDomain', domain);
+}
+// HOME SECTION
+exports.homeSections = {
+    'recComics': '漫畫推薦',
+    'rankDayComics': '上升最快',
+    'rankWeekComics': '近七天',
+    'rankMonthComics': '近三十天',
+};
+
+},{}],49:[function(require,module,exports){
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.CopyManga = exports.CopyMangaInfo = void 0;
+const paperback_extensions_common_1 = require("paperback-extensions-common");
+const Common_1 = require("./Common");
 exports.CopyMangaInfo = {
     version: '0.0.1',
     name: 'CopyManga',
@@ -379,7 +432,7 @@ exports.CopyMangaInfo = {
     authorWebsite: 'http://github.com/fdkevin0',
     icon: 'icon.png',
     contentRating: paperback_extensions_common_1.ContentRating.EVERYONE,
-    websiteBaseURL: COPYMANGA_DOMAIN,
+    websiteBaseURL: "https://copymanga.com",
     sourceTags: [
         {
             text: 'Chinese',
@@ -394,15 +447,12 @@ exports.CopyMangaInfo = {
 class CopyManga extends paperback_extensions_common_1.Source {
     constructor() {
         super(...arguments);
+        this.stateManager = createSourceStateManager({});
         this.requestManager = createRequestManager({
             requestsPerSecond: 5,
             requestTimeout: 80000,
         });
         this.RETRY = 5;
-        this.stateManager = createSourceStateManager({});
-    }
-    getMangaShareUrl(mangaId) {
-        return `${COPYMANGA_DOMAIN}/comic/${mangaId}`;
     }
     async getSourceMenu() {
         return Promise.resolve(createSection({
@@ -412,9 +462,13 @@ class CopyManga extends paperback_extensions_common_1.Source {
         }));
     }
     async getMangaDetails(mangaId) {
+        const copymangaAPI = await (0, Common_1.getCopymangaAPI)(this.stateManager);
         const request = createRequestObject({
-            url: `${COPYMANGA_API_DOMAIN}/api/v3/comic2/${mangaId}`,
+            url: `${copymangaAPI}/api/v3/comic2/${mangaId}`,
             method: 'GET',
+            headers: {
+                'platform': '3'
+            }
         });
         const response = await this.requestManager.schedule(request, this.RETRY);
         const jsonData = JSON.parse(response.data);
@@ -426,7 +480,7 @@ class CopyManga extends paperback_extensions_common_1.Source {
                 label: item.name,
             }));
         }
-        const trimedCover = trimCoverLimit(jsonData.results.comic.cover);
+        const trimedCover = (0, Common_1.trimCoverLimit)(jsonData.results.comic.cover);
         console.log(trimedCover);
         return createManga({
             id: mangaId,
@@ -442,29 +496,52 @@ class CopyManga extends paperback_extensions_common_1.Source {
         });
     }
     async getChapters(mangaId) {
-        const request = createRequestObject({
-            url: `${COPYMANGA_API_DOMAIN}/api/v3/comic/${mangaId}/group/default/chapters?limit=500&offset=0`,
+        const copymangaAPI = await (0, Common_1.getCopymangaAPI)(this.stateManager);
+        const mangaDetailrequest = createRequestObject({
+            url: `${copymangaAPI}/api/v3/comic2/${mangaId}`,
             method: 'GET',
+            headers: {
+                'platform': '3'
+            }
         });
-        const response = await this.requestManager.schedule(request, this.RETRY);
-        const jsonData = JSON.parse(response.data);
+        const mangaDetailresponse = await this.requestManager.schedule(mangaDetailrequest, this.RETRY);
+        const mangaDetailjsonData = JSON.parse(mangaDetailresponse.data);
         const chapters = [];
-        for (const item of jsonData.results.list) {
-            chapters.push(createChapter({
-                id: item.uuid,
-                mangaId: mangaId,
-                name: item.name,
-                chapNum: Number(item.index + 1 ?? '-1'),
-                time: new Date(item.datetime_created),
-                langCode: paperback_extensions_common_1.LanguageCode.CHINEESE,
-            }));
+        for (const [, groupItem] of Object.entries(mangaDetailjsonData.results.groups)) {
+            const groupData = groupItem;
+            const groupId = groupData.path_word;
+            const request = createRequestObject({
+                url: `${copymangaAPI}/api/v3/comic/${mangaId}/group/${groupId}/chapters?limit=500&offset=0`,
+                method: 'GET',
+                headers: {
+                    'platform': '3'
+                }
+            });
+            const response = await this.requestManager.schedule(request, this.RETRY);
+            const jsonData = JSON.parse(response.data);
+            for (const item of jsonData.results.list) {
+                chapters.push(createChapter({
+                    id: item.uuid,
+                    mangaId: mangaId,
+                    name: item.name,
+                    chapNum: Number(item.index + 1 ?? '-1'),
+                    time: new Date(item.datetime_created),
+                    langCode: paperback_extensions_common_1.LanguageCode.CHINEESE,
+                    group: groupData.name,
+                }));
+            }
         }
         return chapters;
     }
     async getChapterDetails(mangaId, chapterId) {
+        const copymangaAPI = await (0, Common_1.getCopymangaAPI)(this.stateManager);
         const request = createRequestObject({
-            url: `${COPYMANGA_API_DOMAIN}/api/v3/comic/${mangaId}/chapter2/${chapterId}?platform=3`,
+            url: `${copymangaAPI}/api/v3/comic/${mangaId}/chapter2/${chapterId}?platform=3`,
             method: 'GET',
+            headers: {
+                'platform': '3',
+                'webp': '1'
+            }
         });
         const response = await this.requestManager.schedule(request, this.RETRY);
         const jsonData = JSON.parse(response.data);
@@ -472,7 +549,7 @@ class CopyManga extends paperback_extensions_common_1.Source {
         for (var page = 0; page < jsonData.results.chapter.size; page++) {
             for (var i = 0; i < jsonData.results.chapter.words.length; i++) {
                 if (jsonData.results.chapter.words[i] === page) {
-                    pages.push(convertToImageMode(jsonData.results.chapter.contents[i].url, 'c1500x'));
+                    pages.push((0, Common_1.convertImageQuality)(jsonData.results.chapter.contents[i].url, (0, Common_1.getImageQuality)()));
                 }
             }
         }
@@ -484,10 +561,17 @@ class CopyManga extends paperback_extensions_common_1.Source {
         });
     }
     async getSearchResults(query, metadata) {
+        const copymangaAPI = await (0, Common_1.getCopymangaAPI)(this.stateManager);
         const page = metadata?.page ?? 0;
+        const pageSize = (0, Common_1.getPageSize)(this.stateManager);
+        const offset = page * pageSize;
+        const keyword = encodeURI(query.title ?? '');
         const request = createRequestObject({
-            url: `${COPYMANGA_API_DOMAIN}/api/v3/search/comic?format=json&platform=3&limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}&q=${(query.title ?? '')}`,
+            url: `${copymangaAPI}/api/v3/search/comic?format=json&platform=3&limit=${pageSize}&offset=${offset}&q=${keyword}`,
             method: 'GET',
+            headers: {
+                'platform': '3'
+            }
         });
         const response = await this.requestManager.schedule(request, this.RETRY);
         const jsonData = JSON.parse(response.data);
@@ -508,9 +592,13 @@ class CopyManga extends paperback_extensions_common_1.Source {
         });
     }
     async getHomePageSections(sectionCallback) {
+        const copymangaAPI = await (0, Common_1.getCopymangaAPI)(this.stateManager);
         const request = createRequestObject({
-            url: `${COPYMANGA_API_DOMAIN}/api/v3/h5/homeIndex?platform=3`,
+            url: `${copymangaAPI}/api/v3/h5/homeIndex?platform=3`,
             method: 'GET',
+            headers: {
+                'platform': '3'
+            }
         });
         const response = await this.requestManager.schedule(request, this.RETRY);
         const jsonData = JSON.parse(response.data);
@@ -532,10 +620,9 @@ class CopyManga extends paperback_extensions_common_1.Source {
             type: paperback_extensions_common_1.HomeSectionType.featured,
             view_more: false,
         }));
-        const HomeSectionKeys = ['recComics', 'rankDayComics', 'rankWeekComics', 'rankMonthComics'];
-        for (const key of HomeSectionKeys) {
+        for (const [keyword, nameStr] of Object.entries(Common_1.homeSections)) {
             const mangaTiles = [];
-            for (const item of jsonData.results[key].list) {
+            for (const item of jsonData.results[keyword].list) {
                 mangaTiles.push(createMangaTile({
                     id: item.comic.path_word,
                     title: createIconText({ text: item.comic.name }),
@@ -543,8 +630,8 @@ class CopyManga extends paperback_extensions_common_1.Source {
                 }));
             }
             sections.push(createHomeSection({
-                id: key,
-                title: key,
+                id: keyword,
+                title: nameStr,
                 items: mangaTiles,
                 view_more: false,
             }));
@@ -555,15 +642,6 @@ class CopyManga extends paperback_extensions_common_1.Source {
     }
 }
 exports.CopyManga = CopyManga;
-function convertToImageMode(url, mode) {
-    return url.replace('c800x', mode);
-}
-exports.convertToImageMode = convertToImageMode;
-function trimCoverLimit(url) {
-    const limitType = url.split('.').slice(-2).join('.');
-    return url.replace(`.${limitType}`, '');
-}
-exports.trimCoverLimit = trimCoverLimit;
 
-},{"paperback-extensions-common":4}]},{},[48])(48)
+},{"./Common":48,"paperback-extensions-common":4}]},{},[49])(49)
 });
